@@ -26,9 +26,9 @@ int main(int argc, char** argv)
 {
     Timer t;
     double utime;
-    SNicsLU *nicslu;
+    SNicsLU *nicslu = nullptr;
 
-    char *matrixName = NULL;
+    const char *matrixName = nullptr;
     bool PERTURB = false;
 
     double *ax = NULL;
@@ -42,7 +42,7 @@ int main(int argc, char** argv)
 
     for (int i = 1; i < argc;) {
         if (strcmp(argv[i], "-i") == 0) {
-            if(i+1 > argc) {
+            if(i + 1 >= argc) {
                 help_message();
                 return -1;
             }
@@ -59,13 +59,24 @@ int main(int argc, char** argv)
         }
     }
 
-    nicslu = (SNicsLU *)malloc(sizeof(SNicsLU));
+    if (matrixName == nullptr) {
+        help_message();
+        return -1;
+    }
 
+    nicslu = static_cast<SNicsLU *>(malloc(sizeof(SNicsLU)));
+    if (nicslu == nullptr) {
+        cerr << "Failed to allocate NicsLU context." << endl;
+        return -1;
+    }
+
+    // Build a permutation/scaling-adjusted matrix and keep the numeric arrays in CSC.
     int err = preprocess(matrixName, nicslu, &ax, &ai, &ap);
     if (err)
     {
-        // cout << "Reading matrix error" << endl;
-        exit(1);
+        cerr << "Matrix preprocessing failed." << endl;
+        free(nicslu);
+        return -1;
     }
 
     n = nicslu->n;
@@ -75,6 +86,7 @@ int main(int argc, char** argv)
 
     t.start();
 
+    // Symbolic analysis: fill-in prediction, CSR transpose, and level scheduling.
     Symbolic_Matrix A_sym(n, cout, cerr);
     A_sym.fill_in(ai, ap);
     t.elapsedUserTime(utime);
@@ -100,13 +112,14 @@ int main(int argc, char** argv)
 //    A_sym.PrintLevel();
 #endif
 
+    // Numeric factorization on GPU updates A_sym.val in place to LU factors.
     LUonDevice(A_sym, cout, cerr, PERTURB);
 
 #if GLU_DEBUG
     A_sym.ABFTCheckResult();
 #endif
 
-    //solve Ax=b
+    // Solve Ax=b with the computed factors and NICSLU permutations/scales.
     vector<REAL> b(n, 1.);
     vector<REAL> x = A_sym.solve(nicslu, b);
     {
@@ -115,4 +128,11 @@ int main(int argc, char** argv)
             x_f << xx << '\n';
     }
 
+    NicsLU_Destroy(nicslu);
+    free(nicslu);
+    free(ax);
+    free(ai);
+    free(ap);
+
+    return 0;
 }

@@ -12,13 +12,12 @@
 extern "C" {
 #endif
 
-int preprocess( \
-	IN__ char *matrixName, \
-    IN__ SNicsLU *nicslu,\
-	OUT__ double **ax, \
-	OUT__ unsigned int **ai, \
-	OUT__ unsigned int **ap);
-
+int preprocess(
+    IN__ const char *matrixName,
+    IN__ SNicsLU *nicslu,
+    OUT__ double **ax,
+    OUT__ unsigned int **ai,
+    OUT__ unsigned int **ap);
 
 #ifdef __cplusplus
 }

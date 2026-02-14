@@ -43,7 +43,7 @@ int my_DumpA(SNicsLU *nicslu, double **ax, unsigned int **ai, unsigned int **ap)
     pinv = (uint__t *)nicslu->pivot_inv;/*pivot_inv[i]=j-->column i is the jth pivot column*/
     piv = (uint__t *)nicslu->pivot;
 
-    //generate pivot and pivot_inv for function NicsLU_DumpA
+    // Generate identity pivots so we can dump the reordered/scaled matrix as-is.
     for (i = 0; i < n; ++i)
     {
         pinv[i] = i;
@@ -99,20 +99,26 @@ FAIL:
     return -2;
 }
 
-int preprocess(char *matrixName, SNicsLU *nicslu, double **ax, unsigned int **ai, unsigned int **ap)
+int preprocess(const char *matrixName, SNicsLU *nicslu, double **ax, unsigned int **ai, unsigned int **ap)
 {
-    int ret;
-    uint__t *n, *nnz;
+    int ret = NICS_OK;
+    uint__t n = 0;
+    uint__t nnz = 0;
 
-    // nicslu = (SNicsLU *)malloc(sizeof(SNicsLU));
+    if (matrixName == NULL || nicslu == NULL || ax == NULL || ai == NULL || ap == NULL)
+        return -1;
+
+    *ax = NULL;
+    *ai = NULL;
+    *ap = NULL;
+
+    // Caller owns nicslu; preprocess only initializes and analyzes it.
     NicsLU_Initialize(nicslu);
-
-    n = (uint__t *)malloc(sizeof(uint__t));
-    nnz = (uint__t *)malloc(sizeof(uint__t));
 
     printf("Reading matrix...\n");
 
-    ret = NicsLU_ReadTripletColumnToSparse(matrixName, n, nnz, ax, ai, ap);
+    // NICSLU API takes non-const file path but does not modify it.
+    ret = NicsLU_ReadTripletColumnToSparse((char *)matrixName, &n, &nnz, ax, ai, ap);
     if (ret == NICSLU_MATRIX_INVALID)
     {    
         printf("Read invalid matrix\n");
@@ -129,16 +135,32 @@ int preprocess(char *matrixName, SNicsLU *nicslu, double **ax, unsigned int **ai
         goto EXIT;
     }
 
-    NicsLU_CreateMatrix(nicslu, *n, *nnz, *ax, *ai, *ap);
+    ret = NicsLU_CreateMatrix(nicslu, n, nnz, *ax, *ai, *ap);
+    if (ret != NICS_OK)
+    {
+        printf("Create matrix error\n");
+        goto EXIT;
+    }
+
     nicslu->cfgi[0] = 1;
     nicslu->cfgf[1] = 0;
 
     printf("Preprocessing matrix...\n");
 
-    NicsLU_Analyze(nicslu);
+    ret = NicsLU_Analyze(nicslu);
+    if (ret != NICS_OK)
+    {
+        printf("Analyze matrix error\n");
+        goto EXIT;
+    }
     printf("Preprocessing time: %f ms\n", nicslu->stat[0] * 1000);
 
-    my_DumpA(nicslu, ax, ai, ap);
+    ret = my_DumpA(nicslu, ax, ai, ap);
+    if (ret != 0)
+    {
+        printf("DumpA failed\n");
+        goto EXIT;
+    }
     //rp = nicslu->col_perm;
     //cp = nicslu->row_perm_inv;
     //piv = nicslu->pivot;
@@ -148,11 +170,23 @@ int preprocess(char *matrixName, SNicsLU *nicslu, double **ax, unsigned int **ai
 
     return 0;
 EXIT:
+    // Keep ownership simple: destroy NICSLU internals, but do not free caller memory.
     NicsLU_Destroy(nicslu);
-    free(*ax);
-    free(*ai);
-    free(*ap);
-    free(nicslu);
+    if (*ax != NULL)
+    {
+        free(*ax);
+        *ax = NULL;
+    }
+    if (*ai != NULL)
+    {
+        free(*ai);
+        *ai = NULL;
+    }
+    if (*ap != NULL)
+    {
+        free(*ap);
+        *ap = NULL;
+    }
     return -1;
 
 }

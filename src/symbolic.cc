@@ -36,13 +36,13 @@ void Symbolic_Matrix :: fill_in(unsigned *ai, unsigned *ap)
                 break;
         }
 
-        for (unsigned j = 0; j < tmpcol2.size(); ++j)
-        {
-            if (tmpcol2[j] == i)
-            {
-                l_col_ptr.push_back(j + sym_c_ptr.back());
-            }
-        }
+        // Ensure a structural diagonal exists for each column.
+        // Later stages index l_col_ptr/csr_diag_ptr by column/row directly.
+        auto diag_it = lower_bound(tmpcol2.begin(), tmpcol2.end(), i);
+        if (diag_it == tmpcol2.end() || *diag_it != i)
+            diag_it = tmpcol2.insert(diag_it, i);
+
+        l_col_ptr.push_back(sym_c_ptr.back() + distance(tmpcol2.begin(), diag_it));
         sym_c_ptr.push_back(tmpcol2.size() + sym_c_ptr.back());
         sym_r_idx.insert(sym_r_idx.end(), tmpcol2.begin(), tmpcol2.end());
     }
@@ -201,6 +201,9 @@ vector<REAL> Symbolic_Matrix::solve(SNicsLU *nicslu, const vector<REAL> &rhs)
 {
     vector<REAL> b(n);
     vector<REAL> x(n);
+    if (n == 0)
+        return x;
+
     unsigned mc64_scale = nicslu->cfgi[1];
 
     unsigned *rp = nicslu->col_perm;

@@ -136,7 +136,7 @@ __global__ void RL_perturb(
         {
             unsigned ridx = sym_r_idx_dev[currentLPos + offset];
 
-            if (abs(val_dev[l_col_ptr_dev[currentCol]]) < pert)
+            if (fabs(val_dev[l_col_ptr_dev[currentCol]]) < pert)
                 val_dev[l_col_ptr_dev[currentCol]] = pert;
 
             val_dev[currentLPos + offset] /= val_dev[l_col_ptr_dev[currentCol]];
@@ -257,7 +257,7 @@ __global__ void RL_onecol_factorizeCurrentCol_perturb(
         {
             unsigned ridx = sym_r_idx_dev[currentLPos + offset];
 
-            if (abs(val_dev[l_col_ptr_dev[currentCol]]) < pert)
+            if (fabs(val_dev[l_col_ptr_dev[currentCol]]) < pert)
                 val_dev[l_col_ptr_dev[currentCol]] = pert;
 
             val_dev[currentLPos + offset] /= val_dev[l_col_ptr_dev[currentCol]];
@@ -289,23 +289,31 @@ __global__ void RL_onecol_updateSubmat(
 
     int offset = 0;
     subCol = csr_c_idx_dev[subColPos];
+    if (tid == 0)
+        s = 0;
+    __syncthreads();
     while(offset < sym_c_ptr_dev[subCol + 1] - sym_c_ptr_dev[subCol])
     {
-        if (tid + offset < sym_c_ptr_dev[subCol + 1] - sym_c_ptr_dev[subCol])
+        bool active = (tid + offset < sym_c_ptr_dev[subCol + 1] - sym_c_ptr_dev[subCol]);
+        unsigned ridx = 0;
+        if (active)
         {
             subColElem = sym_c_ptr_dev[subCol] + tid + offset;
-            unsigned ridx = sym_r_idx_dev[subColElem];
+            ridx = sym_r_idx_dev[subColElem];
 
             if (ridx == currentCol)
             {
                 s = val_dev[subColElem];
             }
-            __syncthreads();
-            if (ridx > currentCol)
-            {
-                atomicAdd(&val_dev[subColElem], -tmpMem[stream * n + ridx] * s);
-            }
         }
+        // Every thread must reach both barriers; gating __syncthreads by "active"
+        // can deadlock when sub-column nnz is smaller than blockDim.x.
+        __syncthreads();
+        if (active && ridx > currentCol)
+        {
+            atomicAdd(&val_dev[subColElem], -tmpMem[stream * n + ridx] * s);
+        }
+        __syncthreads();
         offset += blockDim.x;
     }
 }
@@ -338,296 +346,294 @@ __global__ void RL_onecol_cleartmpMem(
 
 void LUonDevice(Symbolic_Matrix &A_sym, ostream &out, ostream &err, bool PERTURB)
 {
-    int deviceCount, dev;
-    cudaGetDeviceCount(&deviceCount);
-    cudaDeviceProp deviceProp;
-    dev = 0;
-    cudaGetDeviceProperties(&deviceProp, dev);
-    cudaSetDevice(dev);
-    out << "Device " << dev << ": " << deviceProp.name << " has been selected." << endl;
+    if (A_sym.n == 0 || A_sym.nnz == 0) {
+        err << "Matrix is empty; skipping GPU factorization." << endl;
+        return;
+    }
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    float time;
+    auto cudaCheck = [&](cudaError_t status, const char *op) -> bool {
+        if (status != cudaSuccess) {
+            err << op << " failed: " << cudaGetErrorString(status) << endl;
+            return false;
+        }
+        return true;
+    };
+
     unsigned n = A_sym.n;
     unsigned nnz = A_sym.nnz;
     unsigned num_lev = A_sym.num_lev;
-    unsigned *sym_c_ptr_dev, *sym_r_idx_dev, *l_col_ptr_dev;
-    REAL *val_dev;
-    unsigned *csr_r_ptr_dev, *csr_c_idx_dev, *csr_diag_ptr_dev;
-    int *level_idx_dev;
 
-    cudaEventRecord(start, 0);
-
-    cudaMalloc((void**)&sym_c_ptr_dev, (n + 1) * sizeof(unsigned));
-    cudaMalloc((void**)&sym_r_idx_dev, nnz * sizeof(unsigned));
-    cudaMalloc((void**)&val_dev, nnz * sizeof(REAL));
-    cudaMalloc((void**)&l_col_ptr_dev, n * sizeof(unsigned));
-    cudaMalloc((void**)&csr_r_ptr_dev, (n + 1) * sizeof(unsigned));
-    cudaMalloc((void**)&csr_c_idx_dev, nnz * sizeof(unsigned));
-    cudaMalloc((void**)&csr_diag_ptr_dev, n * sizeof(unsigned));
-    cudaMalloc((void**)&level_idx_dev, n * sizeof(int));
-
-    cudaMemcpy(sym_c_ptr_dev, &(A_sym.sym_c_ptr[0]), (n + 1) * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(sym_r_idx_dev, &(A_sym.sym_r_idx[0]), nnz * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(val_dev, &(A_sym.val[0]), nnz * sizeof(REAL), cudaMemcpyHostToDevice);
-    cudaMemcpy(l_col_ptr_dev, &(A_sym.l_col_ptr[0]), n * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(csr_r_ptr_dev, &(A_sym.csr_r_ptr[0]), (n + 1) * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(csr_c_idx_dev, &(A_sym.csr_c_idx[0]), nnz * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(csr_diag_ptr_dev, &(A_sym.csr_diag_ptr[0]), n * sizeof(unsigned), cudaMemcpyHostToDevice);
-    cudaMemcpy(level_idx_dev, &(A_sym.level_idx[0]), n * sizeof(int), cudaMemcpyHostToDevice);
-
-    REAL* tmpMem;
-    unsigned TMPMEMNUM;
-    size_t MaxtmpMemSize;
-    {
-        size_t free, total;
-        cudaMemGetInfo(&free, &total);
-        //Leave at least 4GB free, smaller size does not work for unknown reason
-        MaxtmpMemSize = free - 4ull * 1024ull * 1024ull * 1024ull;
+    int deviceCount = 0;
+    if (!cudaCheck(cudaGetDeviceCount(&deviceCount), "cudaGetDeviceCount"))
+        return;
+    if (deviceCount <= 0) {
+        err << "No CUDA-capable GPU detected." << endl;
+        return;
     }
-    // Use size of first level to estimate a good tmpMem size
-    const size_t GoodtmpMemChoice = sizeof(REAL) * size_t(n) * size_t(A_sym.level_ptr[1]);
-    if (GoodtmpMemChoice < MaxtmpMemSize)
-        TMPMEMNUM = A_sym.level_ptr[1];
-    else
-        TMPMEMNUM = MaxtmpMemSize / n / sizeof(REAL);
 
-    cudaMalloc((void**)&tmpMem, TMPMEMNUM*n*sizeof(REAL));
-    cudaMemset(tmpMem, 0, TMPMEMNUM*n*sizeof(REAL));
+    int dev = 0;
+    cudaDeviceProp deviceProp;
+    if (!cudaCheck(cudaGetDeviceProperties(&deviceProp, dev), "cudaGetDeviceProperties"))
+        return;
+    if (!cudaCheck(cudaSetDevice(dev), "cudaSetDevice"))
+        return;
+    out << "Device " << dev << ": " << deviceProp.name << " has been selected." << endl;
 
-    int Nstreams = 16;
+    cudaEvent_t start = nullptr, stop = nullptr;
+    unsigned *sym_c_ptr_dev = nullptr, *sym_r_idx_dev = nullptr, *l_col_ptr_dev = nullptr;
+    REAL *val_dev = nullptr;
+    unsigned *csr_r_ptr_dev = nullptr, *csr_c_idx_dev = nullptr, *csr_diag_ptr_dev = nullptr;
+    int *level_idx_dev = nullptr;
+    REAL *tmpMem = nullptr;
+    float time = 0.0f;
+
+    constexpr int Nstreams = 16;
     cudaStream_t streams[Nstreams];
-    for (int j = 0; j < Nstreams; ++j)
-        cudaStreamCreate(&streams[j]);
+    bool stream_created[Nstreams] = {false};
+
+    auto cleanup = [&]() {
+        for (int j = 0; j < Nstreams; ++j) {
+            if (stream_created[j])
+                cudaStreamDestroy(streams[j]);
+        }
+        if (tmpMem != nullptr)
+            cudaFree(tmpMem);
+        if (sym_c_ptr_dev != nullptr)
+            cudaFree(sym_c_ptr_dev);
+        if (sym_r_idx_dev != nullptr)
+            cudaFree(sym_r_idx_dev);
+        if (val_dev != nullptr)
+            cudaFree(val_dev);
+        if (l_col_ptr_dev != nullptr)
+            cudaFree(l_col_ptr_dev);
+        if (csr_c_idx_dev != nullptr)
+            cudaFree(csr_c_idx_dev);
+        if (csr_r_ptr_dev != nullptr)
+            cudaFree(csr_r_ptr_dev);
+        if (csr_diag_ptr_dev != nullptr)
+            cudaFree(csr_diag_ptr_dev);
+        if (level_idx_dev != nullptr)
+            cudaFree(level_idx_dev);
+        if (start != nullptr)
+            cudaEventDestroy(start);
+        if (stop != nullptr)
+            cudaEventDestroy(stop);
+    };
+
+#define CUDA_RETURN_ON_ERR(call, op_name) \
+    do { \
+        if (!cudaCheck((call), (op_name))) { \
+            cleanup(); \
+            return; \
+        } \
+    } while (0)
+
+    CUDA_RETURN_ON_ERR(cudaEventCreate(&start), "cudaEventCreate(start)");
+    CUDA_RETURN_ON_ERR(cudaEventCreate(&stop), "cudaEventCreate(stop)");
+    CUDA_RETURN_ON_ERR(cudaEventRecord(start, 0), "cudaEventRecord(start)");
+
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&sym_c_ptr_dev, (n + 1) * sizeof(unsigned)), "cudaMalloc(sym_c_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&sym_r_idx_dev, nnz * sizeof(unsigned)), "cudaMalloc(sym_r_idx_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&val_dev, nnz * sizeof(REAL)), "cudaMalloc(val_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&l_col_ptr_dev, n * sizeof(unsigned)), "cudaMalloc(l_col_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&csr_r_ptr_dev, (n + 1) * sizeof(unsigned)), "cudaMalloc(csr_r_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&csr_c_idx_dev, nnz * sizeof(unsigned)), "cudaMalloc(csr_c_idx_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&csr_diag_ptr_dev, n * sizeof(unsigned)), "cudaMalloc(csr_diag_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&level_idx_dev, n * sizeof(int)), "cudaMalloc(level_idx_dev)");
+
+    CUDA_RETURN_ON_ERR(cudaMemcpy(sym_c_ptr_dev, &(A_sym.sym_c_ptr[0]), (n + 1) * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(sym_c_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(sym_r_idx_dev, &(A_sym.sym_r_idx[0]), nnz * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(sym_r_idx_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(val_dev, &(A_sym.val[0]), nnz * sizeof(REAL), cudaMemcpyHostToDevice), "cudaMemcpy(val_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(l_col_ptr_dev, &(A_sym.l_col_ptr[0]), n * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(l_col_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(csr_r_ptr_dev, &(A_sym.csr_r_ptr[0]), (n + 1) * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(csr_r_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(csr_c_idx_dev, &(A_sym.csr_c_idx[0]), nnz * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(csr_c_idx_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(csr_diag_ptr_dev, &(A_sym.csr_diag_ptr[0]), n * sizeof(unsigned), cudaMemcpyHostToDevice),
+        "cudaMemcpy(csr_diag_ptr_dev)");
+    CUDA_RETURN_ON_ERR(cudaMemcpy(level_idx_dev, &(A_sym.level_idx[0]), n * sizeof(int), cudaMemcpyHostToDevice),
+        "cudaMemcpy(level_idx_dev)");
+
+    for (int j = 0; j < Nstreams; ++j) {
+        CUDA_RETURN_ON_ERR(cudaStreamCreate(&streams[j]), "cudaStreamCreate");
+        stream_created[j] = true;
+    }
+
+    size_t free_bytes = 0, total_bytes = 0;
+    CUDA_RETURN_ON_ERR(cudaMemGetInfo(&free_bytes, &total_bytes), "cudaMemGetInfo");
+    (void)total_bytes;
+
+    const size_t reserve_bytes = 4ull * 1024ull * 1024ull * 1024ull;
+    size_t max_tmp_mem_size = (free_bytes > reserve_bytes) ? (free_bytes - reserve_bytes) : (free_bytes / 2);
+    const unsigned first_level_cols = (A_sym.level_ptr.size() > 1) ?
+        static_cast<unsigned>(A_sym.level_ptr[1] - A_sym.level_ptr[0]) : 1u;
+    const size_t good_tmp_mem_choice = sizeof(REAL) * size_t(n) * size_t(first_level_cols);
+    const size_t bytes_per_column = sizeof(REAL) * size_t(n);
+    if (max_tmp_mem_size < bytes_per_column)
+        max_tmp_mem_size = bytes_per_column;
+
+    unsigned TMPMEMNUM = 0;
+    if (good_tmp_mem_choice <= max_tmp_mem_size)
+        TMPMEMNUM = first_level_cols;
+    else
+        TMPMEMNUM = static_cast<unsigned>(max_tmp_mem_size / bytes_per_column);
+    if (TMPMEMNUM == 0)
+        TMPMEMNUM = 1;
+
+    const size_t tmp_bytes = size_t(TMPMEMNUM) * size_t(n) * sizeof(REAL);
+    CUDA_RETURN_ON_ERR(cudaMalloc((void**)&tmpMem, tmp_bytes), "cudaMalloc(tmpMem)");
+    CUDA_RETURN_ON_ERR(cudaMemset(tmpMem, 0, tmp_bytes), "cudaMemset(tmpMem)");
 
     // calculate 1-norm of A and perturbation value for perturbation
     float pert = 0;
     if (PERTURB)
     {
         float norm_A = 0;
-        for (int i = 0; i < n; ++i)
+        for (unsigned i = 0; i < n; ++i)
         {
             float tmp = 0;
-            for (int j = A_sym.sym_c_ptr[i]; j < A_sym.sym_c_ptr[i+1]; ++j)
-                tmp += abs(A_sym.val[j]);
+            for (unsigned j = A_sym.sym_c_ptr[i]; j < A_sym.sym_c_ptr[i+1]; ++j)
+                tmp += fabs(A_sym.val[j]);
             if (norm_A < tmp)
                 norm_A = tmp;
         }
-        pert = 3.45e-4 * norm_A;
+        pert = 3.45e-4f * norm_A;
         out << "Gaussian elimination with static pivoting (GESP)..." << endl;
         out << "1-Norm of A matrix is " << norm_A << ", Perturbation value is " << pert << endl;
     }
 
-    for (int i = 0; i < num_lev; ++i)
+    auto launch_batched_level = [&](unsigned level_head, int level_size, unsigned warps_per_block) {
+        dim3 dimBlock(warps_per_block * 32, 1);
+        size_t mem_size = warps_per_block * sizeof(REAL);
+
+        int remaining = level_size;
+        unsigned chunk_idx = 0;
+        while (remaining > 0) {
+            unsigned rest_col = static_cast<unsigned>(remaining) > TMPMEMNUM ?
+                TMPMEMNUM : static_cast<unsigned>(remaining);
+            dim3 dimGrid(rest_col, 1);
+            int in_level_pos = static_cast<int>(chunk_idx * TMPMEMNUM);
+            if (!PERTURB)
+                RL<<<dimGrid, dimBlock, mem_size>>>(sym_c_ptr_dev,
+                                                    sym_r_idx_dev,
+                                                    val_dev,
+                                                    l_col_ptr_dev,
+                                                    csr_r_ptr_dev,
+                                                    csr_c_idx_dev,
+                                                    csr_diag_ptr_dev,
+                                                    level_idx_dev,
+                                                    tmpMem,
+                                                    n,
+                                                    level_head,
+                                                    in_level_pos);
+            else
+                RL_perturb<<<dimGrid, dimBlock, mem_size>>>(sym_c_ptr_dev,
+                                                            sym_r_idx_dev,
+                                                            val_dev,
+                                                            l_col_ptr_dev,
+                                                            csr_r_ptr_dev,
+                                                            csr_c_idx_dev,
+                                                            csr_diag_ptr_dev,
+                                                            level_idx_dev,
+                                                            tmpMem,
+                                                            n,
+                                                            level_head,
+                                                            in_level_pos,
+                                                            pert);
+            remaining -= static_cast<int>(rest_col);
+            ++chunk_idx;
+        }
+    };
+
+    for (unsigned i = 0; i < num_lev; ++i)
     {
         int lev_size = A_sym.level_ptr[i + 1] - A_sym.level_ptr[i];
+        if (lev_size <= 0)
+            continue;
 
-        if (lev_size > 896) { //3584 / 4
-            unsigned WarpsPerBlock = 2;
-            dim3 dimBlock(WarpsPerBlock * 32, 1);
-            size_t MemSize = WarpsPerBlock * sizeof(REAL);
-
-            unsigned j = 0;
-            while(lev_size > 0) {
-                unsigned restCol = lev_size > TMPMEMNUM ? TMPMEMNUM : lev_size;
-                dim3 dimGrid(restCol, 1);
-                if (!PERTURB)
-                    RL<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM);
-                else
-                    RL_perturb<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM,
-                                        pert);
-                j++;
-                lev_size -= TMPMEMNUM;
-            }
+        if (lev_size > 896) {
+            launch_batched_level(A_sym.level_ptr[i], lev_size, 2);
         }
         else if (lev_size > 448) {
-            unsigned WarpsPerBlock = 4;
-            dim3 dimBlock(WarpsPerBlock * 32, 1);
-            size_t MemSize = WarpsPerBlock * sizeof(REAL);
-
-            unsigned j = 0;
-            while(lev_size > 0) {
-                unsigned restCol = lev_size > TMPMEMNUM ? TMPMEMNUM : lev_size;
-                dim3 dimGrid(restCol, 1);
-                if (!PERTURB)
-                    RL<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM);
-                else
-                    RL_perturb<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM,
-                                        pert);
-                j++;
-                lev_size -= TMPMEMNUM;
-            }
+            launch_batched_level(A_sym.level_ptr[i], lev_size, 4);
         }
         else if (lev_size > Nstreams) {
-            dim3 dimBlock(1024, 1);
-            size_t MemSize = 32 * sizeof(REAL);
-            unsigned j = 0;
-            while(lev_size > 0) {
-                unsigned restCol = lev_size > TMPMEMNUM ? TMPMEMNUM : lev_size;
-                dim3 dimGrid(restCol, 1);
-                if (!PERTURB)
-                    RL<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM);
-                else
-                    RL_perturb<<<dimGrid, dimBlock, MemSize>>>(sym_c_ptr_dev,
-                                        sym_r_idx_dev,
-                                        val_dev,
-                                        l_col_ptr_dev,
-                                        csr_r_ptr_dev,
-                                        csr_c_idx_dev,
-                                        csr_diag_ptr_dev,
-                                        level_idx_dev,
-                                        tmpMem,
-                                        n,
-                                        A_sym.level_ptr[i],
-                                        j*TMPMEMNUM,
-                                        pert);
-                j++;
-                lev_size -= TMPMEMNUM;
-            }
+            launch_batched_level(A_sym.level_ptr[i], lev_size, 32);
         }
-        else { // "Big" levels
-            for (unsigned offset = 0; offset < lev_size; offset += Nstreams) {
+        else {
+            // Small levels are mapped to one stream per column to reduce launch overhead.
+            for (int offset = 0; offset < lev_size; offset += Nstreams) {
                 for (int j = 0; j < Nstreams; j++) {
                     if (j + offset < lev_size) {
                         const unsigned currentCol = A_sym.level_idx[A_sym.level_ptr[i] + j + offset];
-                        const unsigned currentLColSize = A_sym.sym_c_ptr[currentCol + 1]
-                            - A_sym.l_col_ptr[currentCol] - 1;
                         const unsigned subMatSize = A_sym.csr_r_ptr[currentCol + 1]
                             - A_sym.csr_diag_ptr[currentCol] - 1;
 
                         if (!PERTURB)
                             RL_onecol_factorizeCurrentCol<<<1, 1024, 0, streams[j]>>>(sym_c_ptr_dev,
-                                                    sym_r_idx_dev,
-                                                    val_dev,
-                                                    l_col_ptr_dev,
-                                                    currentCol,
-                                                    tmpMem,
-                                                    j,
-                                                    n);
+                                                                                        sym_r_idx_dev,
+                                                                                        val_dev,
+                                                                                        l_col_ptr_dev,
+                                                                                        currentCol,
+                                                                                        tmpMem,
+                                                                                        j,
+                                                                                        n);
                         else
                             RL_onecol_factorizeCurrentCol_perturb<<<1, 1024, 0, streams[j]>>>(sym_c_ptr_dev,
-                                                    sym_r_idx_dev,
-                                                    val_dev,
-                                                    l_col_ptr_dev,
-                                                    currentCol,
-                                                    tmpMem,
-                                                    j,
-                                                    n,
-                                                    pert);
+                                                                                                sym_r_idx_dev,
+                                                                                                val_dev,
+                                                                                                l_col_ptr_dev,
+                                                                                                currentCol,
+                                                                                                tmpMem,
+                                                                                                j,
+                                                                                                n,
+                                                                                                pert);
                         if (subMatSize > 0)
                             RL_onecol_updateSubmat<<<subMatSize, 1024, 0, streams[j]>>>(sym_c_ptr_dev,
-                                                        sym_r_idx_dev,
-                                                        val_dev,
-                                                        csr_c_idx_dev,
-                                                        csr_diag_ptr_dev,
-                                                        currentCol,
-                                                        tmpMem,
-                                                        j,
-                                                        n);
+                                                                                          sym_r_idx_dev,
+                                                                                          val_dev,
+                                                                                          csr_c_idx_dev,
+                                                                                          csr_diag_ptr_dev,
+                                                                                          currentCol,
+                                                                                          tmpMem,
+                                                                                          j,
+                                                                                          n);
                         RL_onecol_cleartmpMem<<<1, 1024, 0, streams[j]>>>(sym_c_ptr_dev,
-                                                    sym_r_idx_dev,
-                                                    l_col_ptr_dev,
-                                                    currentCol,
-                                                    tmpMem,
-                                                    j,
-                                                    n);
+                                                                           sym_r_idx_dev,
+                                                                           l_col_ptr_dev,
+                                                                           currentCol,
+                                                                           tmpMem,
+                                                                           j,
+                                                                           n);
                     }
                 }
             }
         }
-        cudaDeviceSynchronize();
+        CUDA_RETURN_ON_ERR(cudaGetLastError(), "kernel launch");
+        CUDA_RETURN_ON_ERR(cudaDeviceSynchronize(), "cudaDeviceSynchronize");
     }
 
-    //copy LU val back to main mem
-    cudaMemcpy(&(A_sym.val[0]), val_dev, nnz * sizeof(REAL), cudaMemcpyDeviceToHost);
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&time, start, stop);
+    CUDA_RETURN_ON_ERR(cudaMemcpy(&(A_sym.val[0]), val_dev, nnz * sizeof(REAL), cudaMemcpyDeviceToHost),
+        "cudaMemcpy(A_sym.val)");
+    CUDA_RETURN_ON_ERR(cudaEventRecord(stop, 0), "cudaEventRecord(stop)");
+    CUDA_RETURN_ON_ERR(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
+    CUDA_RETURN_ON_ERR(cudaEventElapsedTime(&time, start, stop), "cudaEventElapsedTime");
 
     out << "Total GPU time: " << time << " ms" << endl;
 
-    cudaError_t cudaRet = cudaGetLastError();
-    if (cudaRet != cudaSuccess) {
-        out << cudaGetErrorName(cudaRet) << endl;
-        out << cudaGetErrorString(cudaRet) << endl;
-    }
-
 #ifdef GLU_DEBUG
-    //check NaN elements
+    // check NaN elements
     unsigned err_find = 0;
     for(unsigned i = 0; i < nnz; i++)
-        if(isnan(A_sym.val[i]) || isinf(A_sym.val[i])) 
+        if(isnan(A_sym.val[i]) || isinf(A_sym.val[i]))
             err_find++;
 
     if (err_find != 0)
-        err << "LU data check: " << " NaN found!!!!!!!!!!!!!!!!!!!!!!!!!!" << endl;
+        err << "LU data check: NaN/Inf found." << endl;
 #endif
-
-    cudaFree(sym_c_ptr_dev);
-    cudaFree(sym_r_idx_dev);
-    cudaFree(val_dev);
-
-    cudaFree(l_col_ptr_dev);
-    cudaFree(csr_c_idx_dev);
-    cudaFree(csr_r_ptr_dev);
-    cudaFree(csr_diag_ptr_dev);
-
-    cudaFree(level_idx_dev);
+    cleanup();
+#undef CUDA_RETURN_ON_ERR
 }
