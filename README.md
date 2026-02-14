@@ -27,8 +27,6 @@ J2. S. Peng and S. X.-D. Tan, “GLU3.0:  Fast GPU-based Parallel Sparse LU Fact
 
 ## Some recent bug fixes by Codex, Feb 2026
 
-Findings fixed (highest impact first)
-
 CUDA sync bug that could deadlock kernels (__syncthreads() on divergent path)
 
 Fixed in numeric.cu (line 270) (kernel RL_onecol_updateSubmat).
