@@ -1,0 +1,18 @@
+[build-system]
+requires = [
+    "setuptools>=68",
+    "wheel",
+    "pybind11>=2.11",
+]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pyglu"
+version = "0.1.0"
+description = "Python bindings for the GLU GPU-accelerated sparse LU factorization solver"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22"]
+
+[project.optional-dependencies]
+scipy = ["scipy>=1.9"]

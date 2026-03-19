@@ -1,6 +1,6 @@
 # GLU-accelerated Sparse Parallel LU factorization solver V3.0
 
-Last update: Oct 2, 2020
+Last update: March 19, 2026
 
 ## Authors:
 Shaoyi Peng (speng004@ucr.edu)\
@@ -18,6 +18,46 @@ USB 3-Clause License
 ## Sub-directories
 docs: contains some related document's and publications for GLU
 src: contains all the source codes for GLU
+pyglu: Python package (bindings for the GPU solver)
+
+## Python Bindings (pyglu)
+
+`pyglu` exposes the GLU solver as a Python library with an API similar to `scipy.sparse.linalg.splu` / `spsolve`.
+
+### Requirements
+- NVIDIA CUDA Toolkit (`nvcc`); set `CUDA_HOME` if not at `/usr/local/cuda`
+- GCC / G++
+- Python ≥ 3.9, pybind11 ≥ 2.11, NumPy ≥ 1.22
+- SciPy ≥ 1.9 (optional, for passing sparse matrices directly)
+
+### Installation
+```bash
+pip install pybind11
+pip install -e . --no-build-isolation
+```
+
+### Usage
+```python
+import scipy.sparse as sp
+import numpy as np
+import pyglu
+
+A = sp.random(1000, 1000, density=0.01, format='csc') + sp.eye(1000)
+b = np.ones(1000)
+
+# Factorize once, solve multiple times
+lu = pyglu.splu(A)
+x1 = lu.solve(b)
+x2 = lu.solve(np.random.rand(1000))
+
+# Or solve directly
+x = pyglu.spsolve(A, b)
+
+# Enable diagonal perturbation for near-singular matrices
+x = pyglu.spsolve(A, b, perturb=True)
+```
+
+`splu` accepts any scipy sparse matrix (any format) or a raw `(data, indices, indptr, shape)` tuple in CSC format. The solver uses single-precision (float32) arithmetic on the GPU; inputs and outputs are float64 with conversion at the boundary.
 
 ## Publications: 
 J1.  K. He, S. X.-D. Tan, H. Wang and G. Shi, “GPU-Accelerated Parallel Sparse LU Factorization Method for Fast Circuit Analysis”, IEEE Transactions on Very Large Scale Integrated Systems  (TVLSI), vol. 24, no.3, pp.1140-1150, March 2016.
