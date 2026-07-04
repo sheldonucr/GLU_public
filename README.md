@@ -12,6 +12,9 @@ Please contact Sheldon Tan for any question.
 Additional information: 
 https://intra.ece.ucr.edu/~stan/project/glu/glu_proj.htm
 
+GitHub Pages:
+https://sheldonucr.github.io/GLU_public/
+
 ## License
 USB 3-Clause License 
 
