@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GLU 3.0 — GPU-Accelerated Sparse LU Solver for Circuit Simulation</title>
+<meta name="description" content="GLU 3.0 is a CUDA-based parallel sparse LU factorization solver for circuit simulation. It pairs CPU symbolic analysis with GPU numeric factorization to deliver up to 13× faster factorization than GLU 2.0." />
+<meta name="author" content="Shaoyi Peng, Kai He, Sheldon X.-D. Tan — University of California, Riverside" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="GLU 3.0 — GPU-Accelerated Sparse LU Solver" />
+<meta property="og:description" content="Fast GPU-based parallel sparse LU factorization for circuit simulation. Up to 13× faster than GLU 2.0." />
+<meta name="theme-color" content="#080b14" />
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%236d7cff'/%3E%3Cpath d='M28 26h10v38h22v10H28z' fill='%23fff'/%3E%3Ccircle cx='66' cy='34' r='7' fill='%2334e5ff'/%3E%3C/svg%3E" />
+
+<style>
+  :root {
+    --bg: #080b14;
+    --bg-soft: #0b1020;
+    --surface: #101829;
+    --surface-2: #162034;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --text: #eaeef7;
+    --muted: #98a4be;
+    --muted-dim: #6d7a95;
+    --primary: #6d7cff;
+    --primary-2: #a56bff;
+    --cyan: #34e5ff;
+    --gold: #ffc23d;
+    --green: #57e389;
+    --grad: linear-gradient(120deg, #6d7cff 0%, #a56bff 55%, #34e5ff 120%);
+    --grad-text: linear-gradient(100deg, #8b96ff 0%, #b98bff 45%, #4fecff 100%);
+    --shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
+    --radius: 18px;
+    --maxw: 1180px;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "SFMono-Regular", "JetBrains Mono", "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  h1, h2, h3, h4 { line-height: 1.12; letter-spacing: -0.02em; margin: 0; font-weight: 700; }
+
+  p { margin: 0; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .grad-text {
+    background: var(--grad-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cyan);
+  }
+  .eyebrow::before {
+    content: "";
+    width: 26px; height: 1.5px;
+    background: linear-gradient(90deg, var(--cyan), transparent);
+  }
+
+  .section { padding: 96px 0; position: relative; }
+  .section-head { max-width: 720px; margin-bottom: 54px; }
+  .section-head.center { margin-left: auto; margin-right: auto; text-align: center; }
+  .section-head h2 { font-size: clamp(28px, 4vw, 42px); margin: 16px 0 18px; }
+  .section-head p { color: var(--muted); font-size: 18px; }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 13px 22px;
+    border-radius: 12px;
+    font-weight: 600; font-size: 15px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform .18s ease, box-shadow .25s ease, background .25s ease, border-color .25s ease;
+    white-space: nowrap;
+  }
+  .btn svg { width: 18px; height: 18px; }
+  .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 10px 30px -10px rgba(109, 124, 255, 0.7); }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 40px -12px rgba(129, 108, 255, 0.85); }
+  .btn-ghost { background: rgba(255, 255, 255, 0.04); color: var(--text); border-color: var(--border-strong); }
+  .btn-ghost:hover { transform: translateY(-2px); border-color: var(--primary); background: rgba(109, 124, 255, 0.1); }
+
+  /* ---------- Nav ---------- */
+  header.nav {
+    position: fixed; inset: 0 0 auto 0; z-index: 100;
+    backdrop-filter: blur(14px);
+    background: rgba(8, 11, 20, 0.6);
+    border-bottom: 1px solid transparent;
+    transition: background .3s ease, border-color .3s ease;
+  }
+  header.nav.scrolled { background: rgba(8, 11, 20, 0.86); border-bottom-color: var(--border); }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+  .brand-mark { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--grad); box-shadow: 0 6px 18px -6px rgba(109, 124, 255, 0.8); }
+  .brand-mark svg { width: 19px; height: 19px; }
+  .brand small { color: var(--muted-dim); font-weight: 500; font-size: 12px; margin-left: 2px; }
+  .nav-links { display: flex; align-items: center; gap: 30px; }
+  .nav-links a.link { font-size: 14.5px; color: var(--muted); font-weight: 500; transition: color .2s ease; }
+  .nav-links a.link:hover { color: var(--text); }
+  .nav-cta { display: flex; align-items: center; gap: 12px; }
+  .nav-toggle { display: none; background: none; border: 0; color: var(--text); cursor: pointer; padding: 6px; }
+  .nav-toggle svg { width: 26px; height: 26px; }
+
+  /* ---------- Hero ---------- */
+  .hero { position: relative; padding: 150px 0 90px; overflow: hidden; }
+  .hero-bg { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+  .hero-bg .glow { position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.5; }
+  .hero-bg .g1 { width: 560px; height: 560px; top: -180px; left: -120px; background: radial-gradient(circle, rgba(109, 124, 255, 0.55), transparent 65%); }
+  .hero-bg .g2 { width: 520px; height: 520px; top: -80px; right: -140px; background: radial-gradient(circle, rgba(52, 229, 255, 0.32), transparent 65%); }
+  .hero-bg .g3 { width: 480px; height: 480px; bottom: -220px; left: 40%; background: radial-gradient(circle, rgba(165, 107, 255, 0.35), transparent 65%); }
+  .grid-lines { position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px); background-size: 46px 46px; mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 78%); }
+
+  .hero-grid { position: relative; z-index: 1; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+  .hero h1 { font-size: clamp(40px, 6vw, 68px); font-weight: 800; margin: 22px 0 0; letter-spacing: -0.035em; }
+  .hero h1 .sub { display: block; font-size: clamp(19px, 2.4vw, 27px); font-weight: 600; color: var(--text); margin-top: 14px; letter-spacing: -0.02em; }
+  .hero .lede { color: var(--muted); font-size: 18.5px; margin-top: 24px; max-width: 560px; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
+
+  .hero-pills { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); font-size: 13.5px; font-weight: 500; color: var(--muted); }
+  .pill b { color: var(--text); font-weight: 700; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* Matrix hero art */
+  .matrix-art { position: relative; z-index: 1; display: flex; justify-content: center; }
+  .matrix-card {
+    position: relative; width: 100%; max-width: 440px;
+    background: linear-gradient(160deg, rgba(22,32,52,0.9), rgba(13,18,32,0.9));
+    border: 1px solid var(--border-strong);
+    border-radius: 22px; padding: 26px; box-shadow: var(--shadow);
+  }
+  .matrix-card .cap { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; font-size: 12.5px; color: var(--muted-dim); font-family: var(--mono); letter-spacing: 0.04em; }
+  .matrix-card .cap .dots { display: flex; gap: 6px; }
+  .matrix-card .cap .dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  .matrix-svg { width: 100%; height: auto; display: block; border-radius: 12px; }
+  .matrix-legend { display: flex; gap: 18px; margin-top: 18px; font-size: 12px; color: var(--muted); font-family: var(--mono); flex-wrap: wrap; }
+  .matrix-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .matrix-legend span::before { content: ""; width: 11px; height: 11px; border-radius: 3px; }
+  .lg-l::before { background: rgba(109,124,255,0.5); }
+  .lg-u::before { background: rgba(52,229,255,0.4); }
+  .lg-nz::before { background: var(--gold); border-radius: 50% !important; }
+
+  /* ---------- Stat band ---------- */
+  .stat-band { position: relative; z-index: 2; margin-top: 20px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .stat-cell { background: var(--bg-soft); padding: 30px 26px; text-align: center; }
+  .stat-cell .num { font-size: clamp(30px, 4vw, 42px); font-weight: 800; letter-spacing: -0.03em; }
+  .stat-cell .lbl { color: var(--muted); font-size: 13.5px; margin-top: 8px; }
+
+  /* ---------- Feature cards ---------- */
+  .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .card {
+    background: linear-gradient(180deg, var(--surface), var(--bg-soft));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 30px 28px;
+    transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease;
+    position: relative; overflow: hidden;
+  }
+  .card:hover { transform: translateY(-5px); border-color: var(--border-strong); box-shadow: var(--shadow); }
+  .card .ico { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; background: rgba(109,124,255,0.12); border: 1px solid rgba(109,124,255,0.25); margin-bottom: 18px; }
+  .card .ico svg { width: 23px; height: 23px; stroke: var(--primary); }
+  .card h3 { font-size: 19px; margin-bottom: 10px; }
+  .card p { color: var(--muted); font-size: 15px; }
+
+  /* ---------- Performance ---------- */
+  .perf-highlight { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-bottom: 48px; }
+  .ph-card { background: linear-gradient(165deg, rgba(109,124,255,0.12), rgba(13,18,32,0.6)); border: 1px solid rgba(109,124,255,0.22); border-radius: var(--radius); padding: 30px; }
+  .ph-card .big { font-size: clamp(34px, 5vw, 52px); font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
+  .ph-card .cap { color: var(--muted); margin-top: 12px; font-size: 15px; }
+  .ph-card .cap b { color: var(--text); }
+
+  .chart-panel { background: linear-gradient(180deg, var(--surface), var(--bg-soft)); border: 1px solid var(--border); border-radius: var(--radius); padding: 34px 32px; }
+  .chart-panel .chart-title { font-size: 18px; font-weight: 700; }
+  .chart-panel .chart-sub { color: var(--muted); font-size: 14px; margin: 6px 0 28px; }
+  .bar-row { display: grid; grid-template-columns: 128px 1fr 62px; align-items: center; gap: 16px; margin-bottom: 15px; }
+  .bar-row .name { font-family: var(--mono); font-size: 13px; color: var(--muted); text-align: right; }
+  .bar-track { background: rgba(255,255,255,0.05); border-radius: 8px; height: 26px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 8px; background: var(--grad); width: 0; transition: width 1.1s cubic-bezier(.22,.61,.36,1); }
+  .bar-fill.peak { background: linear-gradient(90deg, var(--gold), #ff9d3d); }
+  .bar-row .val { font-weight: 700; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+  .chart-foot { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted-dim); font-size: 12.5px; }
+
+  /* ---------- Pipeline / Architecture ---------- */
+  .pipeline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; position: relative; }
+  .stage {
+    background: linear-gradient(180deg, var(--surface), var(--bg-soft));
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 28px 26px; position: relative;
+  }
+  .stage .step-tag { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; color: var(--cyan); margin-bottom: 16px; }
+  .stage .step-tag .n { width: 22px; height: 22px; border-radius: 6px; background: rgba(52,229,255,0.14); border: 1px solid rgba(52,229,255,0.3); display: grid; place-items: center; font-weight: 700; }
+  .stage h3 { font-size: 20px; margin-bottom: 6px; }
+  .stage .where { font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 14px; }
+  .stage .where.cpu { color: var(--primary-2); }
+  .stage .where.gpu { color: var(--green); }
+  .stage ul { list-style: none; padding: 0; margin: 0; }
+  .stage ul li { position: relative; padding-left: 22px; color: var(--muted); font-size: 14.5px; margin-bottom: 9px; }
+  .stage ul li::before { content: ""; position: absolute; left: 0; top: 9px; width: 8px; height: 8px; border-radius: 2px; background: var(--primary); }
+  .stage.gpu-stage ul li::before { background: var(--green); }
+  .pipe-arrow { position: absolute; top: 50%; right: -22px; transform: translateY(-50%); z-index: 3; width: 30px; height: 30px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border-strong); display: grid; place-items: center; color: var(--cyan); }
+  .pipe-arrow svg { width: 15px; height: 15px; }
+
+  /* ---------- Split feature (algorithm) ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+  .split .kicker { color: var(--gold); font-weight: 600; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .split h2 { font-size: clamp(26px, 3.6vw, 38px); margin: 14px 0 18px; }
+  .split p { color: var(--muted); font-size: 16.5px; margin-bottom: 16px; }
+  .algo-list { list-style: none; padding: 0; margin: 22px 0 0; }
+  .algo-list li { display: flex; gap: 14px; padding: 16px 0; border-top: 1px solid var(--border); }
+  .algo-list li:last-child { border-bottom: 1px solid var(--border); }
+  .algo-list .k { color: var(--cyan); font-family: var(--mono); font-weight: 700; font-size: 14px; flex: 0 0 auto; margin-top: 2px; }
+  .algo-list .t b { display: block; color: var(--text); font-size: 15.5px; margin-bottom: 2px; }
+  .algo-list .t span { color: var(--muted); font-size: 14px; }
+
+  .modes { display: grid; gap: 14px; }
+  .mode {
+    background: linear-gradient(160deg, var(--surface-2), var(--bg-soft));
+    border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px;
+    display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center;
+  }
+  .mode .badge { font-family: var(--mono); font-weight: 800; font-size: 15px; width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center; }
+  .mode.a .badge { background: rgba(109,124,255,0.15); color: #9aa4ff; border: 1px solid rgba(109,124,255,0.3); }
+  .mode.b .badge { background: rgba(165,107,255,0.15); color: #c39bff; border: 1px solid rgba(165,107,255,0.3); }
+  .mode.c .badge { background: rgba(87,227,137,0.15); color: var(--green); border: 1px solid rgba(87,227,137,0.3); }
+  .mode h4 { font-size: 16px; margin-bottom: 3px; }
+  .mode p { font-size: 13.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- Quick start ---------- */
+  .qs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .code-card { background: #0a0f1c; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+  .code-head { display: flex; align-items: center; gap: 10px; padding: 13px 18px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+  .code-head .traffic { display: flex; gap: 7px; }
+  .code-head .traffic i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .code-head .fname { font-family: var(--mono); font-size: 12.5px; color: var(--muted-dim); margin-left: 4px; }
+  .code-head .lang { margin-left: auto; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--cyan); }
+  pre { margin: 0; padding: 22px; overflow-x: auto; font-family: var(--mono); font-size: 13.2px; line-height: 1.75; }
+  pre code { color: #d7deef; }
+  .c-com { color: #5d6b8a; }
+  .c-key { color: #a56bff; }
+  .c-fn { color: #34e5ff; }
+  .c-str { color: #57e389; }
+  .c-num { color: #ffc23d; }
+  .c-flag { color: #ff9d7a; }
+
+  /* ---------- Applications ---------- */
+  .app-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .app { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px 22px; text-align: center; transition: border-color .25s ease, transform .25s ease; }
+  .app:hover { border-color: var(--border-strong); transform: translateY(-4px); }
+  .app .ico { width: 50px; height: 50px; margin: 0 auto 16px; border-radius: 13px; display: grid; place-items: center; background: var(--grad); }
+  .app .ico svg { width: 25px; height: 25px; stroke: #fff; }
+  .app h4 { font-size: 16px; margin-bottom: 7px; }
+  .app p { color: var(--muted); font-size: 13.5px; }
+
+  /* ---------- Publications ---------- */
+  .pub-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 30px; align-items: start; }
+  .pub-list { display: grid; gap: 16px; }
+  .pub { display: grid; grid-template-columns: auto 1fr; gap: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px 24px; transition: border-color .25s ease; }
+  .pub:hover { border-color: var(--border-strong); }
+  .pub .tag { font-family: var(--mono); font-weight: 800; font-size: 13px; color: var(--cyan); padding-top: 3px; }
+  .pub .title { font-size: 15.5px; font-weight: 600; margin-bottom: 6px; }
+  .pub .meta { color: var(--muted); font-size: 13.5px; }
+  .pub .meta a { color: var(--primary); border-bottom: 1px solid rgba(109,124,255,0.4); }
+  .cite-card { background: #0a0f1c; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .cite-card .code-head .fname { color: var(--muted); }
+  .cite-card pre { font-size: 12px; }
+
+  /* ---------- Authors / CTA ---------- */
+  .authors { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 30px; }
+  .author { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 20px; min-width: 240px; }
+  .author .av { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #fff; flex: 0 0 auto; }
+  .author .nm { font-weight: 600; font-size: 15px; }
+  .author .rl { color: var(--muted); font-size: 13px; }
+
+  .cta-band { background: linear-gradient(130deg, rgba(109,124,255,0.16), rgba(52,229,255,0.09)); border: 1px solid var(--border-strong); border-radius: 24px; padding: 56px 48px; text-align: center; position: relative; overflow: hidden; }
+  .cta-band h2 { font-size: clamp(28px, 4vw, 40px); margin-bottom: 16px; }
+  .cta-band p { color: var(--muted); font-size: 18px; max-width: 560px; margin: 0 auto 30px; }
+  .cta-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
+  /* ---------- Footer ---------- */
+  footer.foot { border-top: 1px solid var(--border); padding: 54px 0 40px; background: var(--bg-soft); }
+  .foot-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 40px; }
+  .foot-brand p { color: var(--muted); font-size: 14px; margin-top: 16px; max-width: 320px; }
+  .foot-col h5 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted-dim); margin-bottom: 16px; }
+  .foot-col a { display: block; color: var(--muted); font-size: 14.5px; margin-bottom: 11px; transition: color .2s ease; }
+  .foot-col a:hover { color: var(--text); }
+  .foot-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 44px; padding-top: 26px; border-top: 1px solid var(--border); color: var(--muted-dim); font-size: 13px; }
+  .foot-bottom .badge-lic { font-family: var(--mono); }
+
+  .reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 960px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 44px; }
+    .matrix-art { order: -1; }
+    .matrix-card { max-width: 380px; }
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .card-grid { grid-template-columns: repeat(2, 1fr); }
+    .perf-highlight { grid-template-columns: 1fr; }
+    .pipeline { grid-template-columns: 1fr; gap: 30px; }
+    .pipe-arrow { top: auto; right: 50%; bottom: -30px; transform: translateX(50%) rotate(90deg); }
+    .split { grid-template-columns: 1fr; gap: 34px; }
+    .qs-grid { grid-template-columns: 1fr; }
+    .app-grid { grid-template-columns: repeat(2, 1fr); }
+    .pub-grid { grid-template-columns: 1fr; }
+    .foot-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 720px) {
+    .nav-links { display: none; position: absolute; top: 68px; left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 0; background: rgba(10,14,25,0.98); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); padding: 10px 0; }
+    .nav-links.open { display: flex; }
+    .nav-links a.link { padding: 13px 24px; }
+    .nav-links .nav-cta { padding: 12px 24px; }
+    .nav-toggle { display: block; }
+    .nav-cta .btn-ghost { display: none; }
+    .section { padding: 70px 0; }
+    .card-grid, .app-grid, .foot-grid { grid-template-columns: 1fr; }
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+    .bar-row { grid-template-columns: 92px 1fr 52px; gap: 10px; }
+    .bar-row .name { font-size: 11.5px; }
+    .cta-band { padding: 42px 26px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= NAV ================= -->
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M5 4h3v13h11v3H5z" fill="#fff"/><circle cx="16.5" cy="8" r="3" fill="#0b1020"/></svg>
+      </span>
+      <span>GLU <small>v3.0</small></span>
+    </a>
+    <nav class="nav-links" id="navLinks">
+      <a class="link" href="#overview">Overview</a>
+      <a class="link" href="#performance">Performance</a>
+      <a class="link" href="#architecture">Architecture</a>
+      <a class="link" href="#quickstart">Quick Start</a>
+      <a class="link" href="#publications">Publications</a>
+      <div class="nav-cta">
+        <a class="btn btn-primary" href="https://github.com/sheldonucr/GLU_public" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </nav>
+    <div class="nav-cta" style="gap:10px;">
+      <a class="btn btn-ghost" href="https://github.com/sheldonucr/GLU_public" target="_blank" rel="noopener" id="navGhostGit">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49l-.01-1.9c-2.78.62-3.37-1.2-3.37-1.2-.46-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.35 9.35 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9l-.01 2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>
+        Star
+      </a>
+      <button class="nav-toggle" id="navToggle" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<span id="top"></span>
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+  <div class="hero-bg">
+    <div class="glow g1"></div>
+    <div class="glow g2"></div>
+    <div class="glow g3"></div>
+    <div class="grid-lines"></div>
+  </div>
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="eyebrow">GPU-Accelerated Sparse Linear Solver</span>
+      <h1>
+        GLU <span class="grad-text">3.0</span>
+        <span class="sub">Hybrid right-looking sparse LU factorization on the GPU</span>
+      </h1>
+      <p class="lede">
+        A CUDA-based parallel sparse LU solver built for circuit simulation. GLU 3.0 pairs
+        one-time CPU symbolic analysis with massively parallel GPU numeric factorization —
+        delivering up to <b style="color:var(--text)">13× faster</b> factorization than GLU 2.0.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#quickstart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          Get Started
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/sheldonucr/GLU_public" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49l-.01-1.9c-2.78.62-3.37-1.2-3.37-1.2-.46-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.35 9.35 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9l-.01 2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          View Source
+        </a>
+      </div>
+      <div class="hero-pills">
+        <span class="pill"><span class="dot" style="background:var(--green)"></span> CUDA / <b>C++</b></span>
+        <span class="pill"><span class="dot" style="background:var(--cyan)"></span> <b>pyglu</b> Python API</span>
+        <span class="pill"><span class="dot" style="background:var(--gold)"></span> UC Riverside</span>
+        <span class="pill"><span class="dot" style="background:var(--primary-2)"></span> <b>BSD</b> 3-Clause</span>
+      </div>
+    </div>
+
+    <div class="matrix-art">
+      <div class="matrix-card">
+        <div class="cap">
+          <span>sparse_lu.mtx</span>
+          <span class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+        </div>
+        <svg class="matrix-svg" viewBox="0 0 360 360" xmlns="http://www.w3.org/2000/svg" aria-label="Sparse LU matrix sparsity pattern">
+          <defs>
+            <linearGradient id="lgrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#6d7cff" stop-opacity="0.16"/>
+              <stop offset="1" stop-color="#6d7cff" stop-opacity="0.04"/>
+            </linearGradient>
+            <linearGradient id="ugrad" x1="1" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#34e5ff" stop-opacity="0.14"/>
+              <stop offset="1" stop-color="#34e5ff" stop-opacity="0.03"/>
+            </linearGradient>
+          </defs>
+          <!-- L / U shaded triangles -->
+          <polygon points="10,10 10,350 350,350" fill="url(#lgrad)"/>
+          <polygon points="10,10 350,10 350,350" fill="url(#ugrad)"/>
+          <!-- diagonal -->
+          <line x1="10" y1="10" x2="350" y2="350" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" stroke-dasharray="4 4"/>
+          <!-- L / U labels -->
+          <text x="60" y="300" fill="rgba(154,164,255,0.6)" font-family="monospace" font-size="34" font-weight="700">L</text>
+          <text x="270" y="80" fill="rgba(52,229,255,0.65)" font-family="monospace" font-size="34" font-weight="700">U</text>
+          <g id="nzdots" fill="#ffc23d"></g>
+        </svg>
+        <div class="matrix-legend">
+          <span class="lg-l">L factor</span>
+          <span class="lg-u">U factor</span>
+          <span class="lg-nz">nonzeros</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= STAT BAND ================= -->
+<div class="wrap stat-band">
+  <div class="stat-grid reveal">
+    <div class="stat-cell">
+      <div class="num grad-text">13.0&times;</div>
+      <div class="lbl">Mean GPU speedup<br>over GLU 2.0</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num grad-text">55.9&times;</div>
+      <div class="lbl">Peak speedup on<br>large circuit matrices</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num grad-text">3145&times;</div>
+      <div class="lbl">Faster column<br>dependency detection</div>
+    </div>
+    <div class="stat-cell">
+      <div class="num grad-text">36.7M</div>
+      <div class="lbl">Nonzeros factorized<br>(G3_circuit)</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= OVERVIEW ================= -->
+<section class="section" id="overview">
+  <div class="wrap">
+    <div class="split">
+      <div class="reveal">
+        <span class="eyebrow">What is GLU?</span>
+        <h2>Direct sparse solves at GPU speed, without sacrificing accuracy.</h2>
+        <p>
+          Circuit simulation, power-grid analysis, and other SPICE-class workloads repeatedly
+          solve large, extremely sparse, asymmetric linear systems <b style="color:var(--text)">Ax = b</b>.
+          The LU factorization at their core is notoriously hard to parallelize.
+        </p>
+        <p>
+          <b style="color:var(--text)">GLU</b> (GPU LU) solves this with a hybrid strategy: the sparsity
+          structure is analyzed <b style="color:var(--text)">once on the CPU</b>, then the numeric
+          factorization runs <b style="color:var(--text)">level-by-level on the GPU</b>, exploiting
+          thousands of independent columns in parallel. Version 3.0 rethinks both the dependency
+          analysis and the GPU kernel to push throughput far beyond earlier releases.
+        </p>
+        <ul class="algo-list">
+          <li><span class="k">01</span><span class="t"><b>Right-looking, column-based factorization</b><span>Reformulated as parallel submatrix updates — ideal for the GPU.</span></span></li>
+          <li><span class="k">02</span><span class="t"><b>Level scheduling for parallelism</b><span>Independent columns are grouped into levels and factorized together.</span></span></li>
+          <li><span class="k">03</span><span class="t"><b>NICSLU-powered preprocessing</b><span>AMD reordering &amp; MC64 scaling keep fill-in low and pivots stable.</span></span></li>
+        </ul>
+      </div>
+      <div class="reveal">
+        <div class="code-card">
+          <div class="code-head">
+            <span class="traffic"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+            <span class="fname">solve.sh</span>
+            <span class="lang">shell</span>
+          </div>
+<pre><code><span class="c-com"># Build the solver</span>
+<span class="c-key">cd</span> src/ &amp;&amp; <span class="c-fn">make</span> MAIN
+
+<span class="c-com"># Factorize &amp; solve a Matrix Market system</span>
+<span class="c-com"># (RHS defaults to b = [1, 1, ..., 1])</span>
+./lu_cmd <span class="c-flag">-i</span> circuit.mtx
+
+<span class="c-com"># Near-singular? enable diagonal perturbation</span>
+./lu_cmd <span class="c-flag">-i</span> circuit.mtx <span class="c-flag">-p</span>
+
+<span class="c-com"># → solution written to x.dat</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FEATURES ================= -->
+<section class="section" id="features" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <span class="eyebrow" style="justify-content:center;">Why GLU 3.0</span>
+      <h2>Engineered for the hardest sparse systems</h2>
+      <p>Every stage of the pipeline is tuned for the irregular sparsity and steep dependency chains of real circuit matrices.</p>
+    </div>
+    <div class="card-grid">
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></div>
+        <h3>Relaxed "double-U" dependency detection</h3>
+        <p>A new sufficient-condition algorithm finds column dependencies with just two loops instead of three — running orders of magnitude faster than GLU 2.0 while preserving correctness.</p>
+      </div>
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM2 9h2M2 15h2M20 9h2M20 15h2M9 2v2M15 2v2M9 20v2M15 20v2"/></svg></div>
+        <h3>Dynamic GPU kernel</h3>
+        <p>Three computing modes adapt on the fly to each level's shape — from many small blocks to full 32-warp blocks to per-column CUDA streams — keeping the device saturated end to end.</p>
+      </div>
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="18" cy="18" r="2.5"/></svg></div>
+        <h3>Hybrid CPU + GPU pipeline</h3>
+        <p>Symbolic analysis runs once on the CPU; the expensive numeric factorization runs on the GPU. Ideal for Newton–Raphson loops that refactorize the same structure repeatedly.</p>
+      </div>
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 3v18M3 12h18M6 6l12 12M18 6 6 18"/></svg></div>
+        <h3>Level-scheduled parallelism</h3>
+        <p>Columns are partitioned into dependency levels; every column in a level is independent and factorized concurrently across the GPU's streaming multiprocessors.</p>
+      </div>
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M16 18 22 12 16 6M8 6 2 12l6 6M14 4l-4 16"/></svg></div>
+        <h3>Python bindings (pyglu)</h3>
+        <p>A drop-in <code style="font-family:var(--mono);color:var(--cyan)">scipy.sparse.linalg</code>-style API — <code style="font-family:var(--mono);color:var(--cyan)">splu</code> and <code style="font-family:var(--mono);color:var(--cyan)">spsolve</code> — accepting any SciPy sparse matrix. Factorize once, solve many.</p>
+      </div>
+      <div class="card reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>Algorithm-based fault tolerance</h3>
+        <p>Optional ABFT checks verify column checksums and LU correctness on-device — useful for validating results on long-running or unreliable GPU hardware.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PERFORMANCE ================= -->
+<section class="section" id="performance">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Benchmarks</span>
+      <h2>Measured, matrix by matrix</h2>
+      <p>GLU 3.0 was evaluated on standard circuit matrices, from small nets to the 1.5-million-row <span style="font-family:var(--mono);color:var(--cyan)">G3_circuit</span>. The bigger and denser the problem, the larger the win.</p>
+    </div>
+
+    <div class="perf-highlight">
+      <div class="ph-card reveal">
+        <div class="big grad-text">13.0&times;</div>
+        <div class="cap">arithmetic-mean GPU kernel speedup over <b>GLU 2.0</b> across the full benchmark set (6.7× geometric mean).</div>
+      </div>
+      <div class="ph-card reveal">
+        <div class="big grad-text">7.1&times;</div>
+        <div class="cap">arithmetic-mean speedup over the recent <b>enhanced GLU 2.0</b> of Lee et&nbsp;al. (TVLSI '18).</div>
+      </div>
+      <div class="ph-card reveal">
+        <div class="big grad-text">3145&times;</div>
+        <div class="cap">geometric-mean speedup of the new <b>column-dependency detection</b> — up to 49,847× on ASIC_680ks.</div>
+      </div>
+    </div>
+
+    <div class="chart-panel reveal">
+      <div class="chart-title">GPU factorization speedup vs. GLU 2.0</div>
+      <div class="chart-sub">Higher is better. Representative circuit matrices, sorted by speedup.</div>
+      <div id="barchart"></div>
+      <div class="chart-foot">
+        Source: S. Peng &amp; S. X.-D. Tan, "GLU3.0" (Table I). Single-precision GPU factorization time.
+        Full 14-matrix table and hardware details in the paper.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= ARCHITECTURE ================= -->
+<section class="section" id="architecture" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <span class="eyebrow" style="justify-content:center;">How it works</span>
+      <h2>A three-phase pipeline</h2>
+      <p>The costly structural analysis happens once on the CPU. Only the numeric factorization touches the GPU — so it can be repeated cheaply across simulation iterations.</p>
+    </div>
+    <div class="pipeline">
+      <div class="stage reveal">
+        <div class="step-tag"><span class="n">1</span> PREPROCESS</div>
+        <h3>Reorder &amp; scale</h3>
+        <div class="where cpu">CPU</div>
+        <ul>
+          <li>Read Matrix Market (.mtx) via NICSLU</li>
+          <li>AMD reordering to minimize fill-in</li>
+          <li>MC64 row/column scaling for stable pivots</li>
+          <li>Emit matrix in CSC format</li>
+        </ul>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+      </div>
+      <div class="stage reveal">
+        <div class="step-tag"><span class="n">2</span> SYMBOLIC</div>
+        <h3>Analyze structure</h3>
+        <div class="where cpu">CPU · once</div>
+        <ul>
+          <li>Fill-in prediction (symbolic factorization)</li>
+          <li>CSC → CSR transpose + diagonal pointers</li>
+          <li>Relaxed double-U dependency detection</li>
+          <li>Level scheduling for GPU parallelism</li>
+        </ul>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+      </div>
+      <div class="stage gpu-stage reveal">
+        <div class="step-tag" style="color:var(--green)"><span class="n" style="background:rgba(87,227,137,0.14);border-color:rgba(87,227,137,0.3)">3</span> NUMERIC</div>
+        <h3>Factorize on GPU</h3>
+        <div class="where gpu">GPU</div>
+        <ul>
+          <li>Level-by-level right-looking updates</li>
+          <li>16 CUDA streams, asynchronous columns</li>
+          <li>Dynamic kernel: small / large / stream modes</li>
+          <li>In-place L·U → forward/back substitution</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= KERNEL DEEP DIVE ================= -->
+<section class="section" id="kernel">
+  <div class="wrap split">
+    <div class="reveal">
+      <span class="kicker">The GPU kernel</span>
+      <h2>One kernel, three modes — sized to the work.</h2>
+      <p>
+        Across the levels of a factorization, the amount of parallel work swings wildly: early
+        levels have thousands of tiny columns, later levels have a handful of very wide ones.
+        A single fixed kernel wastes the GPU on one end or the other.
+      </p>
+      <p>
+        GLU 3.0 introduces <b style="color:var(--text)">dynamic resource allocation</b>. Based on each
+        level's size and its sub-column profile, it dispatches one of three kernel modes so the
+        device stays fully occupied from the first level to the last.
+      </p>
+    </div>
+    <div class="modes reveal">
+      <div class="mode a">
+        <span class="badge">A</span>
+        <div>
+          <h4>Small-block mode</h4>
+          <p>One warp per sub-column, a few warps per block, many blocks launched — perfect for wide levels with thousands of small columns.</p>
+        </div>
+      </div>
+      <div class="mode b">
+        <span class="badge">B</span>
+        <div>
+          <h4>Large-block mode</h4>
+          <p>Still one warp per sub-column, but 32 warps packed into each block and fewer blocks — for the mid-range levels.</p>
+        </div>
+      </div>
+      <div class="mode c">
+        <span class="badge">C</span>
+        <div>
+          <h4>Stream mode</h4>
+          <p>One block per sub-column dispatched across CUDA streams — concurrency for the deep, narrow tail of the dependency graph.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= QUICK START ================= -->
+<section class="section" id="quickstart" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <span class="eyebrow" style="justify-content:center;">Quick start</span>
+      <h2>Run it from the shell or from Python</h2>
+      <p>Use the <span style="font-family:var(--mono);color:var(--cyan)">lu_cmd</span> command-line tool, or drop <span style="font-family:var(--mono);color:var(--cyan)">pyglu</span> into an existing SciPy workflow.</p>
+    </div>
+    <div class="qs-grid">
+      <div class="code-card reveal">
+        <div class="code-head">
+          <span class="traffic"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="fname">command line</span>
+          <span class="lang">bash</span>
+        </div>
+<pre><code><span class="c-com"># Requirements: NVIDIA CUDA Toolkit, g++</span>
+<span class="c-key">cd</span> src/
+<span class="c-fn">make</span> MAIN            <span class="c-com"># builds ./lu_cmd</span>
+
+<span class="c-com"># Solve with static pivoting (GESP)</span>
+./lu_cmd <span class="c-flag">-i</span> matrix.mtx
+
+<span class="c-com"># Or with diagonal perturbation</span>
+./lu_cmd <span class="c-flag">-i</span> matrix.mtx <span class="c-flag">-p</span>
+
+<span class="c-com"># Solution vector → x.dat</span></code></pre>
+      </div>
+      <div class="code-card reveal">
+        <div class="code-head">
+          <span class="traffic"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="fname">pyglu_example.py</span>
+          <span class="lang">python</span>
+        </div>
+<pre><code><span class="c-key">import</span> scipy.sparse <span class="c-key">as</span> sp
+<span class="c-key">import</span> numpy <span class="c-key">as</span> np
+<span class="c-key">import</span> pyglu
+
+A = sp.random(<span class="c-num">1000</span>, <span class="c-num">1000</span>, density=<span class="c-num">0.01</span>,
+              format=<span class="c-str">'csc'</span>) + sp.eye(<span class="c-num">1000</span>)
+b = np.ones(<span class="c-num">1000</span>)
+
+<span class="c-com"># Factorize once, solve many times</span>
+lu = pyglu.<span class="c-fn">splu</span>(A)
+x1 = lu.<span class="c-fn">solve</span>(b)
+x2 = lu.<span class="c-fn">solve</span>(np.random.rand(<span class="c-num">1000</span>))
+
+<span class="c-com"># …or one-shot solve</span>
+x  = pyglu.<span class="c-fn">spsolve</span>(A, b)</code></pre>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:28px;" class="reveal">
+      <span style="color:var(--muted);font-size:14.5px;">Install the Python package:
+        <code style="font-family:var(--mono);color:var(--cyan);background:rgba(52,229,255,0.08);padding:3px 9px;border-radius:6px;">pip install pybind11 &amp;&amp; pip install -e . --no-build-isolation</code>
+      </span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= APPLICATIONS ================= -->
+<section class="section" id="applications">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <span class="eyebrow" style="justify-content:center;">Where it's used</span>
+      <h2>Built for EDA-scale workloads</h2>
+    </div>
+    <div class="app-grid">
+      <div class="app reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M7 3v4M12 3v4M17 3v4M7 17v4M12 17v4M17 17v4M3 7h4M3 12h4M3 17h4M17 7h4M17 12h4M17 17h4"/></svg></div>
+        <h4>Circuit simulation</h4>
+        <p>The linear solve at the heart of every SPICE transient and DC step.</p>
+      </div>
+      <div class="app reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></div>
+        <h4>Power-grid analysis</h4>
+        <p>Large, sparse conductance matrices from on-chip power delivery networks.</p>
+      </div>
+      <div class="app reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg></div>
+        <h4>VLSI &amp; EDA tooling</h4>
+        <p>A GPU backend for design-automation flows that refactorize repeatedly.</p>
+      </div>
+      <div class="app reveal">
+        <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-7"/></svg></div>
+        <h4>Scientific computing</h4>
+        <p>Any workload dominated by repeated sparse direct solves of the same pattern.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PUBLICATIONS ================= -->
+<section class="section" id="publications" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Research</span>
+      <h2>Publications &amp; citation</h2>
+      <p>GLU is developed in the VSCLAB group at UC Riverside and described in these peer-reviewed papers.</p>
+    </div>
+    <div class="pub-grid">
+      <div class="pub-list">
+        <div class="pub reveal">
+          <span class="tag">J2</span>
+          <div>
+            <div class="title">GLU3.0: Fast GPU-based Parallel Sparse LU Factorization for Circuit Simulation</div>
+            <div class="meta">S. Peng and S. X.-D. Tan · <b>IEEE Design &amp; Test</b>, 2020 · <a href="https://arxiv.org/abs/1908.00204" target="_blank" rel="noopener">arXiv:1908.00204</a></div>
+          </div>
+        </div>
+        <div class="pub reveal">
+          <span class="tag">J1</span>
+          <div>
+            <div class="title">GPU-Accelerated Parallel Sparse LU Factorization Method for Fast Circuit Analysis</div>
+            <div class="meta">K. He, S. X.-D. Tan, H. Wang and G. Shi · <b>IEEE Trans. VLSI Systems</b>, vol. 24, no. 3, pp. 1140–1150, Mar. 2016</div>
+          </div>
+        </div>
+      </div>
+      <div class="cite-card reveal">
+        <div class="code-head">
+          <span class="traffic"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="fname">citation.bib</span>
+          <span class="lang">bibtex</span>
+        </div>
+<pre><code><span class="c-key">@article</span>{peng2020glu3,
+  title   = {<span class="c-str">GLU3.0: Fast GPU-based Parallel
+             Sparse LU Factorization for
+             Circuit Simulation</span>},
+  author  = {<span class="c-str">Peng, Shaoyi and Tan,
+             Sheldon X.-D.</span>},
+  journal = {<span class="c-str">IEEE Design &amp; Test</span>},
+  year    = {<span class="c-num">2020</span>},
+  note    = {<span class="c-str">arXiv:1908.00204</span>}
+}</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= AUTHORS / CTA ================= -->
+<section class="section" id="about">
+  <div class="wrap">
+    <div class="cta-band reveal">
+      <h2>Bring GPU LU factorization to your simulator</h2>
+      <p>GLU 3.0 is open source under the BSD 3-Clause license. Clone it, build it, and cite the paper.</p>
+      <div class="cta-actions">
+        <a class="btn btn-primary" href="https://github.com/sheldonucr/GLU_public" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49l-.01-1.9c-2.78.62-3.37-1.2-3.37-1.2-.46-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.35 9.35 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9l-.01 2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          Get GLU on GitHub
+        </a>
+        <a class="btn btn-ghost" href="https://intra.ece.ucr.edu/~stan/project/glu/glu_proj.htm" target="_blank" rel="noopener">Project homepage</a>
+      </div>
+      <div class="authors" style="justify-content:center;">
+        <div class="author">
+          <span class="av" style="background:linear-gradient(135deg,#6d7cff,#a56bff)">SP</span>
+          <div><div class="nm">Shaoyi Peng</div><div class="rl">UC Riverside</div></div>
+        </div>
+        <div class="author">
+          <span class="av" style="background:linear-gradient(135deg,#34e5ff,#6d7cff)">KH</span>
+          <div><div class="nm">Kai He</div><div class="rl">UC Riverside</div></div>
+        </div>
+        <div class="author">
+          <span class="av" style="background:linear-gradient(135deg,#ffc23d,#ff9d3d)">ST</span>
+          <div><div class="nm">Prof. Sheldon X.-D. Tan</div><div class="rl">UC Riverside · ECE</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top">
+          <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none"><path d="M5 4h3v13h11v3H5z" fill="#fff"/><circle cx="16.5" cy="8" r="3" fill="#0b1020"/></svg></span>
+          <span>GLU <small>v3.0</small></span>
+        </a>
+        <p>GPU-accelerated sparse LU factorization for circuit simulation. Developed at the University of California, Riverside.</p>
+      </div>
+      <div class="foot-col">
+        <h5>Project</h5>
+        <a href="#overview">Overview</a>
+        <a href="#performance">Performance</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quickstart">Quick Start</a>
+      </div>
+      <div class="foot-col">
+        <h5>Resources</h5>
+        <a href="https://github.com/sheldonucr/GLU_public" target="_blank" rel="noopener">GitHub Repository</a>
+        <a href="https://arxiv.org/abs/1908.00204" target="_blank" rel="noopener">GLU 3.0 Paper (arXiv)</a>
+        <a href="https://intra.ece.ucr.edu/~stan/project/glu/glu_proj.htm" target="_blank" rel="noopener">Project Homepage</a>
+        <a href="mailto:stan@ece.ucr.edu">Contact</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2016–2026 Sheldon Tan Research Group, UC Riverside.</span>
+      <span class="badge-lic">BSD 3-Clause License · Built with CUDA + NICSLU</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // Nav scroll state
+  var nav = document.getElementById('nav');
+  var onScroll = function () {
+    if (window.scrollY > 12) nav.classList.add('scrolled');
+    else nav.classList.remove('scrolled');
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // Mobile menu
+  var toggle = document.getElementById('navToggle');
+  var links = document.getElementById('navLinks');
+  toggle.addEventListener('click', function () { links.classList.toggle('open'); });
+  links.addEventListener('click', function (e) {
+    if (e.target.classList.contains('link')) links.classList.remove('open');
+  });
+
+  // Sparse matrix dots (deterministic pseudo-random, always includes diagonal)
+  (function buildMatrix() {
+    var g = document.getElementById('nzdots');
+    if (!g) return;
+    var N = 15, pad = 14, span = 360 - pad * 2, cell = span / N, r = cell * 0.26;
+    var seed = 1337;
+    var rnd = function () { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    var svgns = 'http://www.w3.org/2000/svg';
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < N; i++) {
+      for (var j = 0; j < N; j++) {
+        var isDiag = i === j;
+        if (!isDiag && rnd() > 0.15) continue;
+        var c = document.createElementNS(svgns, 'circle');
+        c.setAttribute('cx', (pad + j * cell + cell / 2).toFixed(1));
+        c.setAttribute('cy', (pad + i * cell + cell / 2).toFixed(1));
+        c.setAttribute('r', (isDiag ? r * 1.15 : r).toFixed(1));
+        c.setAttribute('fill', isDiag ? '#ffc23d' : (j > i ? '#34e5ff' : '#8b96ff'));
+        c.setAttribute('opacity', isDiag ? '1' : '0.7');
+        frag.appendChild(c);
+      }
+    }
+    g.appendChild(frag);
+  })();
+
+  // Benchmark bar chart (speedup over GLU 2.0, from GLU3.0 Table I)
+  var data = [
+    { name: 'ASIC_680ks', v: 55.9 },
+    { name: 'G3_circuit', v: 44.2 },
+    { name: 'ASIC_320ks', v: 26.0 },
+    { name: 'ASIC_100ks', v: 12.3 },
+    { name: 'rajat20', v: 10.5 },
+    { name: 'Raj1', v: 9.4 },
+    { name: 'onetone2', v: 9.0 },
+    { name: 'rajat15', v: 6.4 },
+    { name: 'circuit_4', v: 5.7 },
+    { name: 'hcircuit', v: 5.2 }
+  ];
+  var max = 60;
+  var host = document.getElementById('barchart');
+  data.forEach(function (d, idx) {
+    var row = document.createElement('div');
+    row.className = 'bar-row';
+    var name = document.createElement('div');
+    name.className = 'name'; name.textContent = d.name;
+    var track = document.createElement('div');
+    track.className = 'bar-track';
+    var fill = document.createElement('div');
+    fill.className = 'bar-fill' + (idx === 0 ? ' peak' : '');
+    fill.setAttribute('data-w', (d.v / max * 100).toFixed(1));
+    track.appendChild(fill);
+    var val = document.createElement('div');
+    val.className = 'val'; val.style.color = idx === 0 ? 'var(--gold)' : 'var(--text)';
+    val.textContent = d.v.toFixed(1) + '×';
+    row.appendChild(name); row.appendChild(track); row.appendChild(val);
+    host.appendChild(row);
+  });
+
+  // Reveal on scroll + animate bars
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      en.target.classList.add('in');
+      if (en.target.id === 'performance' || en.target.querySelector) {
+        var fills = en.target.querySelectorAll ? en.target.querySelectorAll('.bar-fill') : [];
+        fills.forEach(function (f, i) {
+          setTimeout(function () { f.style.width = f.getAttribute('data-w') + '%'; }, 120 + i * 70);
+        });
+      }
+      io.unobserve(en.target);
+    });
+  }, { threshold: 0.14 });
+  document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+})();
+</script>
+</body>
+</html>
